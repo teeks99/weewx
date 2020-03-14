@@ -1,7 +1,8 @@
-recursive-include docs *
-recursive-include util *
-recursive-include skins *
-recursive-include examples *
+graft docs
+graft util
+graft skins
+graft examples
 include LICENSE.txt
-include README
+include README.md
 include weewx.conf
+global-exclude *.py[cod] __pycache__ junk*
