@@ -1,5 +1,5 @@
 #
-#    Copyright (c) 2009-2019 Tom Keffer <tkeffer@gmail.com>
+#    Copyright (c) 2009-2020 Tom Keffer <tkeffer@gmail.com>
 #
 #    See the file LICENSE.txt for your full rights.
 #
@@ -15,6 +15,7 @@ from __future__ import print_function
 
 import logging
 from configobj import ConfigObj
+from six import iteritems
 
 import weedb
 import weeutil.logger
@@ -33,36 +34,51 @@ log = logging.getLogger(__name__)
 DEFAULTS_INI = """
 [StdWXCalculate]
 
-    ignore_zero_wind = True     # If windSpeed is zero, should windDir be set to None?
-    rain_period = 900           # Rain rate window
-    retain_period = 930         # How long to retain rain events. Should be >= rain_period + archive_delay
-    et_period = 3600            # For evapotranspiration
-    wind_height = 2.0           # For evapotranspiration. In meters.
-    atc = 0.8                   # For solar radiation RS
-    nfac = 2                    # Atmospheric turbidity (2=clear, 4-5=smoggy)
-    max_delta_12h = 1800        # When looking up a temperature in the past, how close does the time have to be?
     data_binding = wx_binding
+    ignore_zero_wind = True         # If windSpeed is zero, should windDir be set to None?
 
-    [[Calculations]]
-        # Order matters! Type 'pressure' must come before 'altimeter' and 'barometer'
-        # pressure = prefer_hardware
-        # altimeter = prefer_hardware
-        # appTemp = prefer_hardware
-        # barometer = prefer_hardware
-        # beaufort = prefer_hardware        
-        # cloudbase = prefer_hardware
-        # dewpoint = prefer_hardware
-        # ET = prefer_hardware
-        # heatindex = prefer_hardware
-        # humidex = prefer_hardware
-        # inDewpoint = prefer_hardware
-        # maxSolarRad = prefer_hardware
-        # rainRate = prefer_hardware
-        # windchill = prefer_hardware
-        # windrun = prefer_hardware
-    [[Algorithms]]
-        altimeter = aaASOS
-        maxSolarRad = RS
+    [[pressure]]
+        source = prefer_hardware
+        max_delta_12h = 1800        # When looking up a temperature in the past, how close does the time have to be?
+    [[altimeter]]
+        source = prefer_hardware
+        algorithm = aaASOS
+    [[appTemp]]
+        source = prefer_hardware
+    [[barometer]]
+        source = prefer_hardware
+    [[beaufort]]
+        source = prefer_hardware
+    [[cloudbase]]
+        source = prefer_hardware
+    [[dewpoint]]
+        source = prefer_hardware
+    [[ET]]
+        source = prefer_hardware
+        et_period = 3600            # For evapotranspiration
+        wind_height = 2.0, meter    # For evapotranspiration. In meters.
+    [[heatindex]]
+        source = prefer_hardware
+    [[humidex]]
+        source = prefer_hardware
+    [[inDewpoint]]
+        source = prefer_hardware
+    [[maxSolarRad]]
+        source = prefer_hardware
+        algorithm = RS
+        atc = 0.8                   # For solar radiation RS
+        nfac = 2                    # Atmospheric turbidity (2=clear, 4-5=smoggy)
+    [[rain]]
+        source = prefer_hardware
+        total = yearRain
+    [[rainRate]]
+        source = prefer_hardware
+        rain_period = 900           # Rain rate window
+        retain_period = 930         # How long to retain rain events. Should be >= rain_period + archive_delay
+    [[windchill]]
+        source = prefer_hardware
+    [[windrun]]
+        source= prefer_hardware
 """
 
 
@@ -126,33 +142,51 @@ class WXCalculate(object):
         self.ignore_zero_wind = to_bool(self.svc_dict.get('ignore_zero_wind', True))
 
         # Instantiate a PressureCooker to calculate various kinds of pressure
+        # First obtain the arguments required for the PressureCooker
+        if 'pressure' in self.svc_dict:
+            max_delta_12h = int(self.svc_dict['pressure'].get('max_delta_12h', 1800))
+        else:
+            max_delta_12h = 1800
+        if 'altimeter' in self.svc_dict:
+            altimeter_alg = self.svc_dict['altimeter'].get('algorithm', 'aaASOS')
+        else:
+            altimeter_alg = 'aaASOS'
+        # now instantiate a PressureCooker
         self.pressure_cooker = PressureCooker(altitude_vt,
-                                              to_int(self.svc_dict.get('max_delta_12h', 1800)),
-                                              self.svc_dict['Algorithms'].get('altimeter',
-                                                                              'aaASOS'))
-        # Instantiate a RainRater to calculate rainRate
-        self.rain_rater = RainRater(to_int(self.svc_dict.get('rain_period', 900)),
-                                    to_int(self.svc_dict.get('retain_period', 930)))
+                                              max_delta_12h,
+                                              altimeter_alg)
+        # Add the PressureCooker type extensions into the type system
+        weewx.xtypes.xtypes.append(self.pressure_cooker)
+
+        # If required instantiate a RainMaker to calculate rain
+        if 'rain' in self.svc_dict:
+            # Now instantiate a RainMaker
+            self.rain_maker = RainMaker(self.svc_dict['rain'].get('total', 'yearRain'))
+            # Add the RainMaker type extensions into the type system
+            weewx.xtypes.xtypes.append(self.rain_maker)
+
+        # If required instantiate a RainRater to calculate rainRate
+        if 'rainRate' in self.svc_dict:
+            # Now instantiate a RainRater
+            self.rain_rater = RainRater(to_int(self.svc_dict['rainRate'].get('rain_period', 900)),
+                                        to_int(self.svc_dict['rainRate'].get('retain_period', 930)))
+            # Add the RainRater type extensions into the type system
+            weewx.xtypes.xtypes.append(self.rain_rater)
 
         # Instantiate a WXXTypes object to calculate simple scalars (like dewpoint, etc.)
-        self.wx_types = WXXTypes(self.svc_dict,
-                                 altitude_vt,
-                                 latitude_f,
-                                 longitude_f)
-
-        # Now add all our type extensions into the type system
-        weewx.xtypes.xtypes.append(self.pressure_cooker)
-        weewx.xtypes.xtypes.append(self.rain_rater)
+        self.wx_types = WXXTypes(self.svc_dict, altitude_vt, latitude_f, longitude_f)
+        # Add the WXXTypes type extensions into the type system
         weewx.xtypes.xtypes.append(self.wx_types)
 
         # Report about which values will be calculated...
         log.info("The following values will be calculated: %s",
-                 ', '.join(["%s=%s" % (k, self.svc_dict['Calculations'][k])
-                            for k in self.svc_dict['Calculations']]))
+                 ', '.join(["%s=%s" % (k, v['source'])
+                            for k,v in iteritems(self.svc_dict) if hasattr(v, 'keys')]))
+
         # ...and which algorithms will be used.
         log.info("The following algorithms will be used for calculations: %s",
-                 ', '.join(["%s=%s" % (k, self.svc_dict['Algorithms'][k])
-                            for k in self.svc_dict['Algorithms']]))
+                 ', '.join(["%s=%s" % (k, v['algorithm'])
+                            for k,v in iteritems(self.svc_dict) if hasattr(v, 'keys') and 'algorithm' in v]))
 
     def new_loop_packet(self, loop_packet):
         # Keep the RainRater up to date:
@@ -169,17 +203,23 @@ class WXCalculate(object):
         if self.ignore_zero_wind:
             self.adjust_winddir(data_dict)
 
-        # Go through the list of potential calculations and see which ones need to be done
-        for obs in self.svc_dict['Calculations']:
-            directive = self.svc_dict['Calculations'][obs]
-            # Keys in svc_dict are in unicode. Keys in packets and records are in native strings.
-            # Just to keep things consistent, convert.
-            obs_type = str(obs)
+        # Go through the list of potential calculations and see which ones need
+        # to be done
+        for derived_obs in self.svc_dict.sections:
+            # Get the 'source' for the obs
+            directive = self.svc_dict[derived_obs].get('source')
+            # Keys in svc_dict are in unicode. Keys in packets and records
+            # are in native strings. Just to keep things consistent,
+            # convert.
+            obs_type = str(derived_obs)
             if directive == 'software' or directive == 'prefer_hardware' \
                     and (obs_type not in data_dict or data_dict[obs_type] is None):
                 try:
-                    # We need to do a calculation for type 'obs_type'. This may raise an exception.
-                    new_value = weewx.xtypes.get_scalar(obs_type, data_dict, self.db_manager)
+                    # We need to do a calculation for type 'obs_type'. This
+                    # may raise an exception.
+                    new_value = weewx.xtypes.get_scalar(obs_type,
+                                                        data_dict,
+                                                        self.db_manager)
                 except weewx.CannotCalculate:
                     pass
                 except weewx.UnknownType as e:
@@ -187,7 +227,8 @@ class WXCalculate(object):
                 except weewx.UnknownAggregation as e:
                     log.debug("Unknown aggregation '%s'" % e)
                 else:
-                    # If there was no exception, add the results to the dictionary
+                    # If there was no exception, add the results to the
+                    # dictionary
                     data_dict[obs_type] = new_value[0]
 
     @staticmethod
@@ -201,11 +242,13 @@ class WXCalculate(object):
             data['windGustDir'] = None
 
     def shut_down(self):
-        for xtype in [self.pressure_cooker, self.rain_rater, self.wx_types]:
-            # Give the object an opportunity to clean up
-            xtype.shut_down()
-            # Remove from the type system
-            weewx.xtypes.xtypes.remove(xtype)
+        for xtype in ['pressure_cooker', 'rain_maker',
+                      'rain_rater', 'wx_types']:
+            if hasattr(self, xtype):
+                # Give the object an opportunity to clean up
+                getattr(self, type).shut_down()
+                # Remove from the type system
+                weewx.xtypes.xtypes.remove(getattr(self, type))
         self.db_manager = None
 
 
@@ -229,19 +272,41 @@ class WXXTypes(weewx.xtypes.XType):
         self.latitude = latitude
         self.longitude = longitude
 
-        # window of time for evapotranspiration calculation, in seconds
-        self.et_period = to_int(svc_dict.get('et_period', 3600))
-        # atmospheric transmission coefficient [0.7-0.91]
-        self.atc = to_float(svc_dict.get('atc', 0.8))
-        # Fail hard if out of range:
-        if not 0.7 <= self.atc <= 0.91:
-            raise weewx.ViolatedPrecondition("Atmospheric transmission "
-                                             "coefficient (%f) out of "
-                                             "range [.7-.91]" % self.atc)
-        # atmospheric turbidity (2=clear, 4-5=smoggy)
-        self.nfac = to_float(svc_dict.get('nfac', 2))
-        # height above ground at which wind is measured, in meters
-        self.wind_height = to_float(svc_dict.get('wind_height', 2.0))
+        # ET specific properties
+        if 'ET' in svc_dict:
+            # Window of time for evapotranspiration calculation, in seconds
+            self.et_period = to_int(svc_dict['ET'].get('et_period', 3600))
+            # Height above ground at which wind is measured, in meters
+            wind_height = weeutil.weeutil.option_as_list(svc_dict['ET'].get('wind_height',
+                                                                            (2.0, 'meter')))
+            # wind_height may be specified as a single value in meters or as
+            # a value, unit pair
+            if len(wind_height) > 1:
+                # We have a value, unit pair so we need to do any necessary
+                # conversion to meters. First construct a ValueTuple.
+                wh_vt = ValueTuple(float(wind_height[0]), wind_height[1], 'group_altitude')
+                # Then convert to meters
+                self.wind_height = weewx.units.convert(wh_vt, 'meter').value
+            else:
+                # We have a value only so assume it is meters
+                self.wind_height = float(wind_height[0])
+        else:
+            self.et_period = 3600
+            self.wind_height = 2.0
+        # maxSolarRad specific properties
+        if 'maxSolarRad' in svc_dict:
+            # atmospheric transmission coefficient [0.7-0.91]
+            self.atc = to_float(svc_dict['maxSolarRad'].get('atc', 0.8))
+            # Fail hard if out of range:
+            if not 0.7 <= self.atc <= 0.91:
+                raise weewx.ViolatedPrecondition("Atmospheric transmission "
+                                                 "coefficient (%f) out of "
+                                                 "range [.7-.91]" % self.atc)
+            # atmospheric turbidity (2=clear, 4-5=smoggy)
+            self.nfac = to_float(svc_dict.get('nfac', 2))
+        else:
+            self.atc = 0.8
+            self.nfac = 2
 
     def get_scalar(self, obs_type, record, db_manager):
 
@@ -672,3 +737,33 @@ class RainRater(weewx.xtypes.XType):
                                      db_manager)
         except weedb.DatabaseError as e:
             log.debug("Database error while initializing rainRate: '%s'" % e)
+
+class RainMaker(weewx.xtypes.XType):
+    """"An extension to the WeeWX type system for calculating rain"""
+
+    def __init__(self, source_field):
+        """Initialize the RainMaker.
+
+        Args:
+            source_field: Source field from which to derive rain.
+        """
+        self.source_field = source_field
+        # Initialise the last source field value seen
+        self.last_rain_value = None
+
+    def get_scalar(self, key, record, db_manager):
+        """Calculate rain"""
+        if key != 'rain':
+            raise weewx.UnknownType(key)
+
+        if self.source_field in record:
+            # Calculate the rain value
+            _rain = weewx.wxformulas.calculate_rain(record[self.source_field],
+                                                    self.last_rain_value)
+            # Update the last source field value seen
+            self.last_rain_value = record[self.source_field]
+            # Return the rain value as a ValueTuple
+            return ValueTuple(_rain, weewx.units.getStandardUnitType(record['usUnits'], 'rain'), 'group_rain')
+        # If the source field is not available we cannot calculate rain so
+        # raise a CannotCalculate exception
+        raise weewx.CannotCalculate('rain')
