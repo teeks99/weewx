@@ -17,7 +17,7 @@ import weewx.drivers
 import weeutil.weeutil
 
 DRIVER_NAME = 'Simulator'
-DRIVER_VERSION = "3.2"
+DRIVER_VERSION = "3.3"
 
 def loader(config_dict, engine):
 
@@ -114,6 +114,7 @@ class Simulator(weewx.drivers.AbstractDevice):
             'radiation'  : Solar(magnitude=1000, solar_start=6, solar_length=12),
             'UV'         : Solar(magnitude=14,   solar_start=6, solar_length=12),
             'rain'       : Rain(rain_start=0, rain_length=3, total_rain=0.2, loop_interval=self.loop_interval),
+#            'rainTotal'  : Rain(rain_start=15, rain_length=3, total_rain=2, loop_interval=self.loop_interval, cumulative=True),
             'txBatteryStatus': BatteryStatus(),
             'windBatteryStatus': BatteryStatus(),
             'rainBatteryStatus': BatteryStatus(),
@@ -206,14 +207,17 @@ class Rain(object):
 
     bucket_tip = 0.01
 
-    def __init__(self, rain_start=0, rain_length=1, total_rain=0.1, loop_interval=None):
+    def __init__(self, rain_start=0, rain_length=1, total_rain=0.1,
+                 loop_interval=None, cumulative=False):
         """Initialize a rain simulator"""
         npackets = 3600 * rain_length / loop_interval
         n_rain_packets = total_rain / Rain.bucket_tip
         self.period = int(npackets/n_rain_packets)
-        self.rain_start = 3600* rain_start
+        self.rain_start = 3600 * rain_start
         self.rain_end = self.rain_start + 3600 * rain_length
         self.packet_number = 0
+        self.cumulative = cumulative
+        self.rain_sum = 0.0
 
     def value_at(self, time_ts):
         time_tt = time.localtime(time_ts)
@@ -224,7 +228,11 @@ class Rain(object):
         else:
             self.packet_number = 0
             amt = 0
-        return amt
+        if self.cumulative:
+            self.rain_sum += amt
+            return self.rain_sum
+        else:
+            return amt
 
 
 class Solar(object):
