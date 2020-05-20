@@ -26,12 +26,12 @@ import weewx.units
 import weewx.wxformulas
 import weewx.xtypes
 from six.moves import StringIO
-from weeutil.weeutil import to_int, to_float, to_bool, TimeSpan
+from weeutil.weeutil import to_int, to_float, to_bool
 from weewx.units import ValueTuple, mps_to_mph, kph_to_mph, METER_PER_FOOT, CtoF
 
 log = logging.getLogger(__name__)
 
-DEFAULTS_INI = """
+OLD_DEFAULTS_INI = """
 [StdWXCalculate]
 
     data_binding = wx_binding
@@ -80,6 +80,59 @@ DEFAULTS_INI = """
     [[windrun]]
         source= prefer_hardware
 """
+DEFAULTS_INI = """
+[StdWXCalculate]
+
+    data_binding = wx_binding
+    ignore_zero_wind = True         # If windSpeed is zero, should windDir be set to None?
+
+    [[Delta]]
+        [[[rain]]]
+            source = prefer_hardware
+            total = yearRain
+    [[Cumulative]]
+    [[PressureCooker]]
+        [[[pressure]]]
+            source = prefer_hardware
+            max_delta_12h = 1800        # When looking up a temperature in the past, how close does the time have to be?
+        [[[altimeter]]]
+            source = prefer_hardware
+            algorithm = aaASOS
+        [[[barometer]]]
+            source = prefer_hardware
+    [[WXXTypes]]
+        [[[appTemp]]]
+            source = prefer_hardware
+        [[[beaufort]]]
+            source = prefer_hardware
+        [[[cloudbase]]]
+            source = prefer_hardware
+        [[[dewpoint]]]
+            source = prefer_hardware
+        [[[ET]]]
+            source = prefer_hardware
+            et_period = 3600            # For evapotranspiration
+            wind_height = 2.0, meter    # For evapotranspiration. In meters.
+        [[[heatindex]]]
+            source = prefer_hardware
+        [[[humidex]]]
+            source = prefer_hardware
+        [[[inDewpoint]]]
+            source = prefer_hardware
+        [[[maxSolarRad]]]
+            source = prefer_hardware
+            algorithm = RS
+            atc = 0.8                   # For solar radiation RS
+            nfac = 2                    # Atmospheric turbidity (2=clear, 4-5=smoggy)
+        [[[rainRate]]]
+            source = prefer_hardware
+            rain_period = 900           # Rain rate window
+            retain_period = 930         # How long to retain rain events. Should be >= rain_period + archive_delay
+        [[[windchill]]]
+            source = prefer_hardware
+        [[[windrun]]]
+            source= prefer_hardware
+"""
 
 
 class StdWXCalculate(weewx.engine.StdService):
@@ -101,7 +154,6 @@ class StdWXCalculate(weewx.engine.StdService):
         self.bind(weewx.NEW_ARCHIVE_RECORD, self.new_archive_record)
 
     def new_loop_packet(self, event):
-
         self.calc.new_loop_packet(event.packet)
 
         # Now augment the packet with extended types as per the configuration
@@ -141,56 +193,84 @@ class WXCalculate(object):
 
         self.ignore_zero_wind = to_bool(self.svc_dict.get('ignore_zero_wind', True))
 
-        # Instantiate a PressureCooker to calculate various kinds of pressure
-        # First obtain the arguments required for the PressureCooker
-        if 'pressure' in self.svc_dict:
-            max_delta_12h = int(self.svc_dict['pressure'].get('max_delta_12h', 1800))
-        else:
-            max_delta_12h = 1800
-        if 'altimeter' in self.svc_dict:
-            altimeter_alg = self.svc_dict['altimeter'].get('algorithm', 'aaASOS')
-        else:
-            altimeter_alg = 'aaASOS'
-        # now instantiate a PressureCooker
-        self.pressure_cooker = PressureCooker(altitude_vt,
-                                              max_delta_12h,
-                                              altimeter_alg)
-        # Add the PressureCooker type extensions into the type system
-        weewx.xtypes.xtypes.append(self.pressure_cooker)
-
-        # If required instantiate a RainMaker to calculate rain
-        if 'rain' in self.svc_dict:
-            # Now instantiate a RainMaker
-            self.rain_maker = RainMaker(self.svc_dict['rain'].get('total', 'yearRain'))
-            # Add the RainMaker type extensions into the type system
-            weewx.xtypes.xtypes.append(self.rain_maker)
-
-        # If required instantiate a RainRater to calculate rainRate
-        if 'rainRate' in self.svc_dict:
-            # Now instantiate a RainRater
-            self.rain_rater = RainRater(to_int(self.svc_dict['rainRate'].get('rain_period', 900)),
-                                        to_int(self.svc_dict['rainRate'].get('retain_period', 930)))
-            # Add the RainRater type extensions into the type system
-            weewx.xtypes.xtypes.append(self.rain_rater)
-
-        # Instantiate a WXXTypes object to calculate simple scalars (like dewpoint, etc.)
-        self.wx_types = WXXTypes(self.svc_dict, altitude_vt, latitude_f, longitude_f)
-        # Add the WXXTypes type extensions into the type system
-        weewx.xtypes.xtypes.append(self.wx_types)
+        self.altitude_vt = altitude_vt
+        self.latitude = latitude_f
+        self.longitude = longitude_f
+        self.loop_call_list = list()
+        for section in self.svc_dict.sections:
+            xtype_obj_list = self.xtype_factory(section)
+            if xtype_obj_list:
+                weewx.xtypes.xtypes += xtype_obj_list
 
         # Report about which values will be calculated...
         log.info("The following values will be calculated: %s",
                  ', '.join(["%s=%s" % (k, v['source'])
-                            for k,v in iteritems(self.svc_dict) if hasattr(v, 'keys')]))
+                            for k, v in iteritems(self.svc_dict) if hasattr(v, 'keys')]))
 
         # ...and which algorithms will be used.
         log.info("The following algorithms will be used for calculations: %s",
                  ', '.join(["%s=%s" % (k, v['algorithm'])
-                            for k,v in iteritems(self.svc_dict) if hasattr(v, 'keys') and 'algorithm' in v]))
+                            for k, v in iteritems(self.svc_dict) if
+                            hasattr(v, 'keys') and 'algorithm' in v]))
+
+    def xtype_factory(self, section):
+        """Factory method to create XType objects to support derived obs."""
+
+        section_config = self.svc_dict[section]
+        if len(section_config) > 0:
+            instantiate_method = '_'.join(['instantiate', section.lower()])
+            return getattr(self, instantiate_method)(section_config)
+        return list()
+
+    def instantiate_delta(self, config_dict):
+        """Instantiate any Delta objects."""
+
+        object_list = []
+        for delta_sect in config_dict:
+            object_list.append(Delta(delta_sect, **config_dict[delta_sect]))
+        return object_list
+
+    def instantiate_cumulative(self, config_dict):
+        """Instantiate any Cumulative objects."""
+
+        object_list = []
+        for cumulative_sect in config_dict:
+            object_list.append(Cumulative(cumulative_sect,
+                                          **config_dict[cumulative_sect]))
+        return object_list
+
+    def instantiate_pressurecooker(self, config_dict):
+        """Instantiate any PressureCooker objects."""
+
+        object = PressureCooker(config_dict,
+                                altitude_vt=self.altitude_vt)
+        return [object, ]
+
+    def instantiate_wxxtypes(self, config_dict):
+        """Instantiate any WXXTypes objects."""
+
+        object = WXXTypes(config_dict,
+                          altitude_vt=self.altitude_vt,
+                          latitude=self.latitude,
+                          longitude=self.longitude)
+        return [object, ]
+
+    def instantiate_rater(self, config_dict):
+        """Instantiate any Rater objects."""
+
+        object_list = []
+        for rater_sect in config_dict:
+            object = Rater(rater_sect, **config_dict[rater_sect])
+            object_list.append(object)
+            self.loop_call_list.append({'object': object,
+                                        'method': 'add_loop_packet'})
+        return object_list
 
     def new_loop_packet(self, loop_packet):
-        # Keep the RainRater up to date:
-        self.rain_rater.add_loop_packet(loop_packet, self.db_manager)
+
+        # Keep any Raters up to date:
+        for call in self.loop_call_list:
+            call['object'].call['method'](loop_packet, self.db_manager)
 
     def do_calculations(self, data_dict, data_type):
         """Augment the data dictionary with derived types as necessary.
@@ -526,7 +606,8 @@ class WXXTypes(weewx.xtypes.XType):
 class PressureCooker(weewx.xtypes.XType):
     """Pressure related extensions to the WeeWX type system. """
 
-    def __init__(self, altitude_vt, max_ts_delta=1800, altimeter_algorithm='aaNOAA'):
+    def __init__(self, svc_dict, altitude_vt)
+        # def __init__(self, altitude_vt, max_ts_delta=1800, altimeter_algorithm='aaNOAA'):
         """Initialize the PressureCooker.
 
         altitude_vt: The altitude as a ValueTuple
@@ -536,12 +617,19 @@ class PressureCooker(weewx.xtypes.XType):
 
         altimeter_algorithm: Algorithm to use to calculate altimeter.
         """
+
         self.altitude_vt = altitude_vt
-        self.max_ts_delta = max_ts_delta
+        if 'pressure' in svc_dict:
+            self.max_ts_delta = int(svc_dict['pressure'].get('max_delta_12h', 1800))
+        else:
+            self.max_ts_delta = 1800
+        if 'altimeter' in svc_dict:
+            altimeter_algorithm = svc_dict['altimeter'].get('algorithm', 'aaASOS')
+        else:
+            altimeter_algorithm = 'aaASOS'
         if not altimeter_algorithm.startswith('aa'):
             altimeter_algorithm = 'aa%s' % altimeter_algorithm
         self.altimeter_algorithm = altimeter_algorithm
-
         # Timestamp (roughly) 12 hours ago
         self.ts_12h = None
         # Temperature 12 hours ago as a ValueTuple
@@ -663,20 +751,22 @@ class PressureCooker(weewx.xtypes.XType):
         return weewx.units.convertStd((barometer, u, 'group_pressure'), record['usUnits'])
 
 
-class RainRater(weewx.xtypes.XType):
+class Rater(weewx.xtypes.XType):
     """"An extension to the WeeWX type system for calculating rainRate"""
 
-    def __init__(self, rain_period, retain_period):
-        """Initialize the RainRater.
+    def __init__(self, field, **rater_dict):
+        """Initialize the Rater.
 
         Args:
             rain_period: The length of the sliding window in seconds.
             retain_period: How long to retain a rain event. Should be rain_period
               plus archive_delay.
         """
-        self.rain_period = rain_period
-        self.retain_period = retain_period
-        self.rain_events = None
+        self.field = field
+        self.source_field = rater_dict.get('source_field')
+        self.period = to_int(rater_dict.get('period', 900))
+        self.retain_period = to_int(rater_dict.get('retain_period', 930))
+        self.events = None
         self.unit_system = None
 
     def add_loop_packet(self, record, db_manager):
@@ -686,84 +776,105 @@ class RainRater(weewx.xtypes.XType):
             if self.unit_system is None:
                 # Adopt the unit system of the first record.
                 self.unit_system = record['usUnits']
-            if self.rain_events is None:
+            if self.events is None:
                 self._setup(record['dateTime'], db_manager)
             # Get the unit system and group of the incoming rain. In theory, this should be
             # the same as self.unit_system, but ...
-            u, g = weewx.units.getStandardUnitType(record['usUnits'], 'rain')
+            u, g = weewx.units.getStandardUnitType(record['usUnits'], self.source_field)
             # Convert to the unit system that we are using
-            rain = weewx.units.convertStd((record['rain'], u, g), self.unit_system)[0]
-            # Add it to the list of rain events
-            self.rain_events.append((record['dateTime'], rain))
+            rain = weewx.units.convertStd((record[self.source_field], u, g), self.unit_system)[0]
+            # Add it to the list of events
+            self.events.append((record['dateTime'], rain))
 
-        if self.rain_events:
+        if self.events:
             # Trim any old packets:
-            self.rain_events = [x for x in self.rain_events
-                                if x[0] >= record['dateTime'] - self.rain_period]
+            self.events = [x for x in self.events
+                           if x[0] >= record['dateTime'] - self.period]
 
     def get_scalar(self, key, record, db_manager):
-        """Calculate the rainRate"""
-        if key != 'rainRate':
+        """Calculate the Rate"""
+        if key != self.field:
             raise weewx.UnknownType(key)
 
-        if self.rain_events is None:
+        if self.events is None:
             self._setup(record['dateTime'], db_manager)
 
         # Sum the rain events within the time window...
-        rainsum = sum(x[1] for x in self.rain_events
-                      if x[0] > record['dateTime'] - self.rain_period)
+        rainsum = sum(x[1] for x in self.events
+                      if x[0] > record['dateTime'] - self.period)
         # ...then divide by the period and scale to an hour
-        val = 3600 * rainsum / self.rain_period
+        val = 3600 * rainsum / self.period
         # Get the unit and unit group for rainRate
-        u, g = weewx.units.getStandardUnitType(self.unit_system, 'rainRate')
+        u, g = weewx.units.getStandardUnitType(self.unit_system, self.field)
         # Form a ValueTuple, then convert it to the unit system of the incoming record
         rr = weewx.units.convertStd(ValueTuple(val, u, g), record['usUnits'])
         return rr
 
     def _setup(self, stop_ts, db_manager):
-        """Initialize the rain event list"""
-        if self.rain_events is None:
-            self.rain_events = []
+        """Initialize the event list"""
+        if self.events is None:
+            self.events = []
         start_ts = stop_ts - self.retain_period
-        # Get all rain events since the window start from the database. Put it in
+        # Get all events since the window start from the database. Put it in
         # a 'try' block because the database may not have a 'rain' field.
         try:
-            for row in db_manager.genSql("SELECT dateTime, usUnits, rain FROM %s "
+            for row in db_manager.genSql("SELECT dateTime, usUnits, %s FROM %s "
                                          "WHERE dateTime>? AND dateTime<=?;"
-                                         % db_manager.table_name, (start_ts, stop_ts)):
+                                         % self.source_field, db_manager.table_name,
+                                         (start_ts, stop_ts)):
                 # Unpack the row:
                 time_ts, unit_system, rain = row
-                self.add_loop_packet({'dateTime': time_ts, 'usUnits': unit_system, 'rain': rain},
-                                     db_manager)
+                self.add_loop_packet(
+                    {'dateTime': time_ts, 'usUnits': unit_system, self.source_field: rain},
+                    db_manager)
         except weedb.DatabaseError as e:
-            log.debug("Database error while initializing rainRate: '%s'" % e)
+            log.debug("Database error while initializing %s: '%s'" % (self.field, e))
 
-class RainMaker(weewx.xtypes.XType):
+
+class Delta(weewx.xtypes.XType):
     """"An extension to the WeeWX type system for calculating rain"""
 
-    def __init__(self, source_field):
+    def __init__(self, field, **delta_dict):
         """Initialize the RainMaker.
 
         Args:
-            source_field: Source field from which to derive rain.
+            source_field: Source field from which rain is derived.
         """
-        self.source_field = source_field
+        self.field = field
+        self.source_field = delta_dict.get('source_field')
         # Initialise the last source field value seen
-        self.last_rain_value = None
+        self.last_value = None
 
     def get_scalar(self, key, record, db_manager):
         """Calculate rain"""
-        if key != 'rain':
+        if key != self.field:
             raise weewx.UnknownType(key)
 
-        if self.source_field in record:
+        if self.source_field is not None and self.source_field in record:
             # Calculate the rain value
-            _rain = weewx.wxformulas.calculate_rain(record[self.source_field],
-                                                    self.last_rain_value)
+            _delta = weewx.wxformulas.calculate_rain(record[self.source_field],
+                                                     self.last_value)
             # Update the last source field value seen
-            self.last_rain_value = record[self.source_field]
+            self.last_value = record[self.source_field]
+            unit, group = weewx.units.getStandardUnitType(record['usUnits'], self.field)
             # Return the rain value as a ValueTuple
-            return ValueTuple(_rain, weewx.units.getStandardUnitType(record['usUnits'], 'rain'), 'group_rain')
+            return ValueTuple(_delta, unit, group)
         # If the source field is not available we cannot calculate rain so
         # raise a CannotCalculate exception
-        raise weewx.CannotCalculate('rain')
+        raise weewx.CannotCalculate(self.field)
+
+
+class Cumulative(weewx.xtypes.XType):
+    """"An extension to the WeeWX type system for calculating rain"""
+
+    def __init__(self, field, **cumulative_dict):
+        """Initialize the RainMaker.
+
+        Args:
+            source_field: Source field from which rain is derived.
+        """
+        pass
+
+    def get_scalar(self, key, record, db_manager):
+        """Calculate rain"""
+        raise weewx.CannotCalculate(self.field)
