@@ -174,7 +174,9 @@ def genFakeRecords(start_ts=start_ts, stop_ts=stop_ts, interval=interval,
         record['windGust'] = 1.2 * record['windSpeed']
         record['windGustDir'] = record['windDir']
         if math.sin(weather_phase) > .95:
-            record['rain'] = 0.08 * amplitude if math.sin(weather_phase) > 0.98 else 0.04 * amplitude
+            # Round the results to avoid small rounding errors in the test suites.
+            record['rain'] = round(0.08 * amplitude
+                                   if math.sin(weather_phase) > 0.98 else 0.04 * amplitude, 4)
         else:
             record['rain'] = 0.0
         record['radiation'] = max(amplitude * 800 * math.sin(daily_phase - math.pi / 2.0), 0)

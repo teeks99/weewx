@@ -194,29 +194,25 @@ class ArchiveTable(XType):
                 "AND a.dateTime = (SELECT MIN(dateTime) FROM archive "
                 "WHERE dateTime >= %(start)s);",
         'first': "SELECT %(obs_type)s FROM %(table_name)s "
-                 "WHERE dateTime = (SELECT MIN(dateTime) FROM %(table_name)s "
-                 "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  "
-                 "AND %(obs_type)s IS NOT NULL)",
+                 "WHERE dateTime > %(start)s AND dateTime <= %(stop)s "
+                 "AND %(obs_type)s IS NOT NULL ORDER BY dateTime ASC LIMIT 1;",
         'firsttime': "SELECT MIN(dateTime) FROM %(table_name)s "
                      "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  "
                      "AND %(obs_type)s IS NOT NULL",
         'last': "SELECT %(obs_type)s FROM %(table_name)s "
-                "WHERE dateTime = (SELECT MAX(dateTime) FROM %(table_name)s "
-                "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  "
-                "AND %(obs_type)s IS NOT NULL)",
+                "WHERE dateTime > %(start)s AND dateTime <= %(stop)s "
+                "AND %(obs_type)s IS NOT NULL ORDER BY dateTime DESC LIMIT 1;",
         'lasttime': "SELECT MAX(dateTime) FROM %(table_name)s "
                     "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  "
                     "AND %(obs_type)s IS NOT NULL",
         'maxtime': "SELECT dateTime FROM %(table_name)s "
-                   "WHERE dateTime > %(start)s AND dateTime <= %(stop)s AND "
-                   "%(obs_type)s = (SELECT MAX(%(obs_type)s) FROM %(table_name)s "
-                   "WHERE dateTime > %(start)s and dateTime <= %(stop)s) "
-                   "AND %(obs_type)s IS NOT NULL",
+                   "WHERE dateTime > %(start)s AND dateTime <= %(stop)s "
+                   "AND %(obs_type)s IS NOT NULL "
+                   "ORDER BY %(obs_type)s DESC, dateTime ASC LIMIT 1;",
         'mintime': "SELECT dateTime FROM %(table_name)s "
-                   "WHERE dateTime > %(start)s AND dateTime <= %(stop)s AND "
-                   "%(obs_type)s = (SELECT MIN(%(obs_type)s) FROM %(table_name)s "
-                   "WHERE dateTime > %(start)s and dateTime <= %(stop)s) "
-                   "AND %(obs_type)s IS NOT NULL",
+                   "WHERE dateTime > %(start)s AND dateTime <= %(stop)s "
+                   "AND %(obs_type)s IS NOT NULL "
+                   "ORDER BY %(obs_type)s ASC, dateTime ASC LIMIT 1;",
         'tderiv': "SELECT (b.%(obs_type)s - a.%(obs_type)s) / (b.dateTime-a.dateTime) "
                   "FROM archive a, archive b "
                   "WHERE b.dateTime = (SELECT MAX(dateTime) FROM archive "
@@ -307,8 +303,7 @@ class DailySummaries(XType):
                  "WHERE dateTime >= %(start)s AND dateTime < %(stop)s",
         'gustdir': "SELECT max_dir FROM %(table_name)s_day_%(obs_key)s  "
                    "WHERE dateTime >= %(start)s AND dateTime < %(stop)s "
-                   "AND max = (SELECT MAX(max) FROM %(table_name)s_day_%(obs_key)s "
-                   "WHERE dateTime >= %(start)s AND dateTime < %(stop)s)",
+                   "ORDER BY `max` DESC, dateTime ASC LIMIT 1;",
         'max': "SELECT MAX(max) FROM %(table_name)s_day_%(obs_key)s "
                "WHERE dateTime >= %(start)s AND dateTime < %(stop)s",
         'max_ge': "SELECT SUM(max >= %(val)s) FROM %(table_name)s_day_%(obs_key)s "
@@ -319,18 +314,15 @@ class DailySummaries(XType):
                   "WHERE dateTime >= %(start)s AND dateTime < %(stop)s",
         'maxmintime': "SELECT mintime FROM %(table_name)s_day_%(obs_key)s  "
                       "WHERE dateTime >= %(start)s AND dateTime < %(stop)s "
-                      "AND min = (SELECT MAX(min) FROM %(table_name)s_day_%(obs_key)s "
-                      "WHERE dateTime >= %(start)s AND dateTime <%(stop)s)",
+                      "ORDER BY `min` DESC, dateTime ASC LIMIT 1;",
         'maxsum': "SELECT MAX(sum) FROM %(table_name)s_day_%(obs_key)s "
                   "WHERE dateTime >= %(start)s AND dateTime < %(stop)s",
         'maxsumtime': "SELECT maxtime FROM %(table_name)s_day_%(obs_key)s  "
                       "WHERE dateTime >= %(start)s AND dateTime < %(stop)s "
-                      "AND sum = (SELECT MAX(sum) FROM %(table_name)s_day_%(obs_key)s "
-                      "WHERE dateTime >= %(start)s AND dateTime <%(stop)s)",
+                      "ORDER BY `sum` DESC, dateTime ASC LIMIT 1;",
         'maxtime': "SELECT maxtime FROM %(table_name)s_day_%(obs_key)s  "
                    "WHERE dateTime >= %(start)s AND dateTime < %(stop)s "
-                   "AND max = (SELECT MAX(max) FROM %(table_name)s_day_%(obs_key)s "
-                   "WHERE dateTime >= %(start)s AND dateTime <%(stop)s)",
+                   "ORDER BY `max` DESC, dateTime ASC LIMIT 1;",
         'meanmax': "SELECT AVG(max) FROM %(table_name)s_day_%(obs_key)s "
                    "WHERE dateTime >= %(start)s AND dateTime < %(stop)s",
         'meanmin': "SELECT AVG(min) FROM %(table_name)s_day_%(obs_key)s "
@@ -345,18 +337,15 @@ class DailySummaries(XType):
                   "WHERE dateTime >= %(start)s AND dateTime < %(stop)s",
         'minmaxtime': "SELECT maxtime FROM %(table_name)s_day_%(obs_key)s  "
                       "WHERE dateTime >= %(start)s AND dateTime < %(stop)s "
-                      "AND max = (SELECT MIN(max) FROM %(table_name)s_day_%(obs_key)s "
-                      "WHERE dateTime >= %(start)s AND dateTime <%(stop)s)",
+                      "ORDER BY `max` ASC, datetime ASC LIMIT 1;",
         'minsum': "SELECT MIN(sum) FROM %(table_name)s_day_%(obs_key)s "
                   "WHERE dateTime >= %(start)s AND dateTime < %(stop)s",
         'minsumtime': "SELECT mintime FROM %(table_name)s_day_%(obs_key)s  "
                       "WHERE dateTime >= %(start)s AND dateTime < %(stop)s "
-                      "AND sum = (SELECT MIN(sum) FROM %(table_name)s_day_%(obs_key)s "
-                      "WHERE dateTime >= %(start)s AND dateTime <%(stop)s)",
+                      "ORDER BY `sum` ASC, dateTime ASC LIMIT 1;",
         'mintime': "SELECT mintime FROM %(table_name)s_day_%(obs_key)s  "
                    "WHERE dateTime >= %(start)s AND dateTime < %(stop)s "
-                   "AND min = (SELECT MIN(min) FROM %(table_name)s_day_%(obs_key)s "
-                   "WHERE dateTime >= %(start)s AND dateTime <%(stop)s)",
+                   "ORDER BY `min` ASC, dateTime ASC LIMIT 1;",
         'rms': "SELECT SUM(wsquaresum),SUM(sumtime) FROM %(table_name)s_day_%(obs_key)s "
                "WHERE dateTime >= %(start)s AND dateTime < %(stop)s",
         'sum': "SELECT SUM(sum) FROM %(table_name)s_day_%(obs_key)s "
@@ -575,19 +564,19 @@ class WindVec(XType):
 
     agg_sql_dict = {
         'count': "SELECT COUNT(dateTime), usUnits FROM %(table_name)s "
-                 "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL)",
+                 "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL;",
         'first': "SELECT %(mag)s, %(dir)s, usUnits FROM %(table_name)s "
-                 "WHERE dateTime = (SELECT MIN(dateTime) FROM %(table_name)s "
-                 "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL)",
+                 "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL "
+                 "ORDER BY dateTime ASC LIMIT 1;",
         'last': "SELECT %(mag)s, %(dir)s, usUnits FROM %(table_name)s "
-                "WHERE dateTime = (SELECT MAX(dateTime) FROM %(table_name)s "
-                "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL)",
+                "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL "
+                "ORDER BY dateTime DESC LIMIT 1;",
         'min': "SELECT %(mag)s, %(dir)s, usUnits FROM %(table_name)s "
-               "WHERE %(mag)s = (SELECT MIN(%(mag)s) FROM %(table_name)s "
-               "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL)",
+               "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL "
+               "ORDER BY %(mag)s ASC, dateTime ASC LIMIT 1;",
         'max': "SELECT %(mag)s, %(dir)s, usUnits FROM %(table_name)s "
-               "WHERE %(mag)s = (SELECT MAX(%(mag)s) FROM %(table_name)s "
-               "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL)",
+               "WHERE dateTime > %(start)s AND dateTime <= %(stop)s  AND %(mag)s IS NOT NULL "
+               "ORDER BY %(mag)s DESC, dateTime ASC LIMIT 1;",
     }
     # for types 'avg', 'sum'
     complex_sql_wind = 'SELECT %(mag)s, %(dir)s, usUnits FROM %(table_name)s WHERE dateTime > ? ' \
