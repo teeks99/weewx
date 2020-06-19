@@ -17,38 +17,29 @@ from __future__ import absolute_import
 from __future__ import print_function
 from __future__ import with_statement
 
-import distutils.dir_util
-import distutils.file_util
 import fnmatch
 import os.path
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from distutils import log
+from distutils.command.install import install
 from distutils.command.install_data import install_data
 from distutils.command.install_lib import install_lib
+from distutils.core import setup
 from distutils.debug import DEBUG
 
-from setuptools import setup, find_packages
-from setuptools.command.install import install
+VERSION = "4.1.1"
 
 if sys.version_info < (2, 7):
     log.fatal('WeeWX requires Python V2.7 or greater.')
     log.fatal('For earlier versions of Python, use WeeWX V3.9.')
     sys.exit("Python version unsupported.")
 
-# Find the subdirectory in the distribution that contains the weewx libraries:
 this_file = os.path.join(os.getcwd(), __file__)
 this_dir = os.path.abspath(os.path.dirname(this_file))
-lib_dir = os.path.abspath(os.path.join(this_dir, 'bin'))
-
-# Now that we've found where the libraries are, inject it into the path:
-sys.path.insert(0, lib_dir)
-
-# Now we can get the weewx version
-import weewx
-
-VERSION = weewx.__version__
 
 
 # ==============================================================================
@@ -56,7 +47,25 @@ VERSION = weewx.__version__
 # ==============================================================================
 
 class weewx_install(install):
-    """Specialized version of install, which runs a post-install script"""
+    """Specialized version of install, which adds a '--no-prompt' option, and which runs a
+    wee_config post-install script"""
+
+    # Add an option for --no-prompt. This will be passed on to wee_config
+    user_options = install.user_options + [('no-prompt', None, 'Do not prompt for station info')]
+
+    def initialize_options(self, *args, **kwargs):
+         install.initialize_options(self, *args, **kwargs)
+         self.no_prompt = None
+
+    def finalize_options(self):
+        # Call my superclass's version
+        install.finalize_options(self)
+        # Unless the --force flag has been explicitly set, default to True. This will
+        # cause files to be installed even if they are older than their target."""
+        if self.force is None:
+            self.force = 1
+        if self.no_prompt is None:
+            self.no_prompt = 0
 
     def run(self):
         """Specialized version of run, which runs post-install commands"""
@@ -65,7 +74,8 @@ class weewx_install(install):
         rv = install.run(self)
 
         # Now the post-install
-        update_and_install_config(self.install_data, self.install_scripts, self.install_lib)
+        update_and_install_config(self.install_data, self.install_scripts, self.install_lib,
+                                  self.no_prompt)
 
         return rv
 
@@ -75,37 +85,29 @@ class weewx_install(install):
 # ==============================================================================
 
 class weewx_install_lib(install_lib):
-    """Specialized version of install_lib, which backs up old bin subdirectories."""
+    """Specialized version of install_lib, which saves and restores the 'user' subdirectory."""
 
     def run(self):
-        # Save any existing 'bin' subdirectory:
-        if not self.dry_run and os.path.exists(self.install_dir):
-            bin_savedir = move_with_timestamp(self.install_dir)
-            log.info("Saved bin subdirectory as %s" % bin_savedir)
-        else:
-            bin_savedir = None
+        """Specialized version of run that saves, then restores, the 'user' subdirectory."""
 
-        # Run the superclass's version. This will install all incoming files.
+        # Save any existing 'user' subdirectory:
+        user_dir = os.path.join(self.install_dir, 'user')
+        if not self.dry_run and os.path.exists(user_dir):
+            user_backup_dir = user_dir + ".bak"
+            shutil.move(user_dir, user_backup_dir)
+        else:
+            user_backup_dir = None
+
+        # Run the superclass's version. This will install a new 'user' subdirectory.
         install_lib.run(self)
 
-        # If the bin subdirectory previously existed, and if it included
-        # a 'user' subsubdirectory, then restore it
-        if bin_savedir:
-            user_backupdir = os.path.join(bin_savedir, 'user')
-            if os.path.exists(user_backupdir):
-                user_dir = os.path.join(self.install_dir, 'user')
-                distutils.dir_util.copy_tree(user_backupdir, user_dir)
-                try:
-                    # The file schemas.py is no longer used, and can interfere with schema
-                    # imports. See issue #54.
-                    os.rename(os.path.join(user_dir, 'schemas.py'),
-                              os.path.join(user_dir, 'schemas.py.old'))
-                except OSError:
-                    pass
-                try:
-                    os.remove(os.path.join(user_dir, 'schemas.pyc'))
-                except OSError:
-                    pass
+        # Restore the 'user' subdirectory
+        if user_backup_dir:
+            # Delete the freshly installed user subdirectory
+            shutil.rmtree(user_dir)
+            # Replace it with our saved version.
+            shutil.move(user_backup_dir, user_dir)
+
 
 # ==============================================================================
 # install_data
@@ -143,16 +145,57 @@ class weewx_install_data(install_data):
         return rv
 
     def process_config_file(self, f, install_dir, **kwargs):
-        """Process weewx.conf separately"""
+        """Process the configuration file weewx.conf by inserting the proper path into WEEWX_ROOT,
+        then install as weewx.conf.X.Y.Z, where X.Y.Z is the version number."""
 
-        # Location of the incoming weewx.conf file
-        install_path = os.path.join(install_dir, os.path.basename(f))
+        # The install directory. The normalization is necessary because sometimes there
+        # is a trailing '/'.
+        norm_install_dir = os.path.normpath(install_dir)
 
-        # Install the config file using the template name. Later, we will merge
-        # it with any old config file.
-        template_name = install_path + "." + VERSION
-        rv = install_data.copy_file(self, f, template_name, **kwargs)
-        shutil.copymode(f, template_name)
+        # The path to the destination configuration file. It will look
+        # something like '/home/weewx/weewx.conf.4.0.0'
+        weewx_install_path = os.path.join(norm_install_dir, os.path.basename(f) + '.' + VERSION)
+
+        if self.dry_run:
+            return weewx_install_path, 0
+
+        # This RE is for finding the assignment to WEEWX_ROOT.
+        # It matches the assignment, plus an optional comment. For example, for the string
+        #   '  WEEWX_ROOT = foo  # A comment'
+        # it matches 3 groups:
+        #   Group 1: '  WEEWX_ROOT '
+        #   Group 2: ' foo'
+        #   Group 3: '  # A comment'
+        pattern = re.compile(r'(^\s*WEEWX_ROOT\s*)=(\s*\S+)(\s*#?.*)')
+
+        done = 0
+
+        if self.verbose:
+            log.info("massaging %s -> %s", f, weewx_install_path)
+
+        # Massage the incoming file, assigning the right value for WEEWX_ROOT. Use a temporary
+        # file. This will help in making the operatioin atomic.
+        try:
+            # Open up the incoming configuration file
+            with open(f, mode='rt') as incoming_fd:
+                # Open up a temporary file
+                tmpfd, tmpfn = tempfile.mkstemp()
+                with os.fdopen(tmpfd, 'wt') as tmpfile:
+                    # Go through the incoming template file line by line, inserting a value for
+                    # WEEWX_ROOT. There's only one per file, so stop looking after the first one.
+                    for line in incoming_fd:
+                        if not done:
+                            line, done = pattern.subn("\\1 = %s\\3" % norm_install_dir, line)
+                        tmpfile.write(line)
+
+            if not self.dry_run:
+                # If not a dry run, install the temporary file in the right spot
+                rv = install_data.copy_file(self, tmpfn, weewx_install_path, **kwargs)
+                # Set the permission bits:
+                shutil.copymode(f, weewx_install_path)
+        finally:
+            # Get rid of the temporary file
+            os.remove(tmpfn)
 
         return rv
 
@@ -190,25 +233,8 @@ def find_files(directory, file_excludes=['*.pyc', "junk*"], dir_excludes=['*/__p
     return data_files
 
 
-def move_with_timestamp(filepath):
-    """Save a file to a path with a timestamp."""
-    import shutil
-    import time
-    # Sometimes the target has a trailing '/'. This will take care of it:
-    filepath = os.path.normpath(filepath)
-    newpath = filepath + time.strftime(".%Y%m%d%H%M%S")
-    # Check to see if this name already exists
-    if os.path.exists(newpath):
-        # It already exists. Stick a version number on it:
-        version = 1
-        while os.path.exists(newpath + '-' + str(version)):
-            version += 1
-        newpath = newpath + '-' + str(version)
-    shutil.move(filepath, newpath)
-    return newpath
-
-
-def update_and_install_config(install_dir, install_scripts, install_lib, config_name='weewx.conf'):
+def update_and_install_config(install_dir, install_scripts, install_lib, no_prompt=False,
+                              config_name='weewx.conf'):
     """Install the configuration file, weewx.conf, updating it if necessary.
 
     install_dir: the directory containing the configuration file.
@@ -216,6 +242,8 @@ def update_and_install_config(install_dir, install_scripts, install_lib, config_
     install_scripts: the directory containing the weewx executables.
 
     install_lib: the directory containing the weewx packages.
+
+    no_prompt: Pass a '--no-prompt' flag on to wee_config.
 
     config_name: the name of the configuration file. Defaults to 'weewx.conf'
     """
@@ -234,27 +262,30 @@ def update_and_install_config(install_dir, install_scripts, install_lib, config_
                 '--output=%s' % config_path,
                 ]
     else:
-        # No existing config file. This is an install
+        # No existing config file, so this is a fresh install.
         args = [sys.executable,
                 os.path.join(install_scripts, 'wee_config'),
                 '--install',
                 '--dist-config=%s' % config_path + '.' + VERSION,
                 '--output=%s' % config_path,
                 ]
+        # Add the --no-prompt flag if the user requested it.
+        if no_prompt:
+            args += ['--no-prompt']
 
     if DEBUG:
-        print("Command used to invoke wee_config: %s" % args)
+        log.info("Command used to invoke wee_config: %s" % args)
 
     proc = subprocess.Popen(args,
-                            env={'PYTHONPATH' : install_lib},
+                            env={'PYTHONPATH': install_lib},
                             stdin=sys.stdin,
                             stdout=sys.stdout,
                             stderr=sys.stderr)
     out, err = proc.communicate()
     if DEBUG and out:
-        print('out=', out.decode())
+        log.info('out=', out.decode())
     if DEBUG and err:
-        print('err=', err.decode())
+        log.info('err=', err.decode())
 
 
 # ==============================================================================
@@ -262,62 +293,36 @@ def update_and_install_config(install_dir, install_scripts, install_lib, config_
 # ==============================================================================
 
 if __name__ == "__main__":
-    # Use the README.md for the long description:
-    with open(os.path.join(this_dir, "README.md"), "r") as fd:
-        long_description = fd.read()
-
     setup(name='weewx',
           version=VERSION,
           description='The WeeWX weather software system',
-          long_description=long_description,
-          long_description_content_type="text/markdown",
+          long_description="WeeWX interacts with a weather station to produce graphs, reports, "
+                           "and HTML pages.  WeeWX can upload data to services such as the "
+                           "WeatherUnderground, PWSweather.com, or CWOP.",
           author='Tom Keffer',
           author_email='tkeffer@gmail.com',
           url='http://www.weewx.com',
           license='GPLv3',
-          classifiers=[
-              'Development Status :: 5 - Production/Stable',
-              'Intended Audience :: End Users/Desktop',
-              'Intended Audience :: Science/Research',
-              'License :: OSI Approved :: GNU General Public License v3 (GPLv3)',
-              'Operating System :: POSIX :: Linux',
-              'Operating System :: Unix',
-              'Programming Language :: Python',
-              'Programming Language :: Python :: 2.7',
-              'Programming Language :: Python :: 3.5',
-              'Programming Language :: Python :: 3.6',
-              'Programming Language :: Python :: 3.7',
-              'Programming Language :: Python :: 3.8',
-              'Topic :: Scientific/Engineering :: Physics'
-          ],
-          platforms=['any'],
-          python_requires='>=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*, <4',
-          install_requires=[
-              'cheetah>=2.4; python_version=="2.7"',
-              'cheetah3>=3.2<4.0; python_version>="3.5"',
-              'pillow>=2<7; python_version=="2.7"',
-              'pillow>=5.2; python_version>="3.5" and python_version<"3.8"',
-              'pillow>=7; python_version>="3.8"',
-              'configobj>=4.7',
-              'pyephem>=3.7',
-              'pyserial>=3.4',
-              'pyusb>=1.0.2',
-              'six>=1'
-          ],
           py_modules=['daemon', 'six'],
           package_dir={'': 'bin'},
-          packages=find_packages('bin'),
-          scripts=[
-              'bin/wee_config',
-              'bin/wee_database',
-              'bin/wee_debug',
-              'bin/wee_device',
-              'bin/wee_extension',
-              'bin/wee_import',
-              'bin/wee_reports',
-              'bin/weewxd',
-              'bin/wunderfixer'
-          ],
+          packages=['schemas',
+                    'user',
+                    'weecfg',
+                    'weedb',
+                    'weeimport',
+                    'weeplot',
+                    'weeutil',
+                    'weewx',
+                    'weewx.drivers'],
+          scripts=['bin/wee_config',
+                   'bin/wee_database',
+                   'bin/wee_debug',
+                   'bin/wee_device',
+                   'bin/wee_extension',
+                   'bin/wee_import',
+                   'bin/wee_reports',
+                   'bin/weewxd',
+                   'bin/wunderfixer'],
           data_files=[('', ['LICENSE.txt', 'README.md', 'weewx.conf']), ]
                      + find_files('docs')
                      + find_files('examples')

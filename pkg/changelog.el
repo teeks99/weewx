@@ -1,3 +1,14 @@
+* Sat May 30 2020 Matthew Wall (weewx) <mwall@users.sourceforge.net> - 4.1.1-1
+- new upstream release
+- remove the implicitly-applied dependencies in the redhat rpms
+* Mon May 25 2020 Matthew Wall (weewx) <mwall@users.sourceforge.net> - 4.1.0-1
+- new upstream release
+* Thu Apr 30 2020 Matthew Wall (weewx) <mwall@users.sourceforge.net> - 4.0.0-1
+- new upstream release
+* Thu Apr 09 2020 Matthew Wall (weewx) <mwall@users.sourceforge.net> - 4.0.0b18-2
+- fix python/python3 invocations
+* Thu Apr 09 2020 Matthew Wall (weewx) <mwall@users.sourceforge.net> - 4.0.0b18-1
+- new upstream release
 * Tue Mar 31 2020 Matthew Wall <mwall@users.sourceforge.net> - 4.0.0b17-1
 - new upstream release
 * Wed Feb 26 2020 Matthew Wall <mwall@users.sourceforge.net> - 4.0.0b13-1

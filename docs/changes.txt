@@ -1,7 +1,84 @@
 weewx change history
 --------------------
 
-4.0.0 MM/DD/YYYY
+4.1.2 MM/DD/YYYY
+
+Fixed problem caused by specifying a [Logging]/[[formatters]] section in
+weewx.conf that uses interpolated variables.
+
+
+4.1.1 06/01/2020
+
+Fixed problem that caused wind speed to be reported to AWEKAS in m/s instead
+of km/h.
+
+Fixed problem that caused FTP attempts not to be retried.
+
+Fixed problem that caused monthly and yearly summaries to appear only
+sporadically.
+
+Fixed problem when using the ultimeter driver under Python 2.
+
+Fixed problem when using the ws1 driver under Python 2.
+
+Fixed problem that prevented remote directories from being created by FTP.
+
+New strategy for calculating system uptime under Python 3. Revisits
+issue #428. Alternative to PR #561.
+
+
+4.1.0 05/25/2020
+
+Archive records emitted by the Vantage driver now include the number of wind
+samples per archive interval in field wind_samples.
+
+wee_import can now import WeatherCat monthly .cat files.
+
+Changed the logging configuration dictionary to match the Python documents.
+Thanks to user Graham for figuring this out!
+
+Fixed problem that prevented ws1 driver from working under Python 3. PR #556.
+
+Eliminate use of logging in wee_config, allowing it to be used for installs
+without syslog.
+
+Allow expressions to be used as a datatype when plotting.
+
+Added option 'reuse_ssl' to FTP. This activates a workaround for a bug in the
+Python ftp library that causes long-lived connections to get closed prematurely.
+Works only with Python 3.6 and greater.
+
+The cc3000 driver will automatically reboot the hardware if it stops sending
+observations. PR #549.
+
+Install using setup.py forgot to set WEEWX_ROOT when installing in non-standard
+places. Fixes issue #546.
+
+Fixed bug in ws28xx driver that prevented it from running under Python 3.
+Fixes issue #543.
+
+Changed query strategy for calculating min and max wind vectors, which
+should result in much faster plot generation.
+
+Fixed bug in wmr9x8 driver that prevented it from running under Python 3.
+
+Fixed several bugs in the te923 driver that prevented it from running under
+Python 3.
+
+Added a logging handler for rotating files. See https://bit.ly/2StYSHb for how
+to use it. It is the default for MacOS.
+
+More information if an exception is raised while querying for vantage hardware
+type.
+
+wunderfixer: fixed problem under Python 3 where response was not converted to
+str before attempting to parse the JSON. Option --simulate now requires api_key
+and password, so it can hit the WU.
+
+Fixed problem in te923 driver under Python 3 that caused it to crash.
+
+
+4.0.0 04/30/2020
 
 Ported to Python 3. WeeWX should now run under Python 3.5 and greater, as well
 as Python 2.7. Support for Python 2.5 and 2.6 has been dropped.
@@ -117,6 +194,8 @@ wee_import now tolerates periods that contain no source data. Fixes issue #499.
 wee_import now accepts strings representing cardinal, intercardinal and
 secondary intercardinal directions in CSV imports. Partially fixes issue #238.
 
+The field delimiter character may now be defined for wee_import CSV imports.
+
 Ignore historical records if the timestamp is in the future.
 
 Can now recover from MariaDB-specific database connection error 1927.
@@ -134,6 +213,9 @@ Use correct log path for netbsd and openbsd in logger setup.
 
 StdWXCalculate no longer calculates anything by default. Instead, types to be
 calculated must be listed in weewx.conf. See the Upgrade Guide.
+
+setup.py install no longer saves the old 'bin' subdirectory. Instead, it simply
+overwrites it.
 
 
 3.9.2 07/14/2019
