@@ -89,6 +89,7 @@ Extending the WeeWX logwatch script:
 # TODO. reportengine.py maybe change format of line 189 output
 
 # TODO. Better capture
+# TODO. 'Errors' ingestion needs to capture match groups
 # TODO. Get obs outside qc limits
 # TODO. restx_db_error should capture protocol name and error
 # TODO. restx_upload_errors should capture protocol name and error
@@ -2490,6 +2491,7 @@ class WeeWXLogwatchProcessor(LogwatchProcessor):
             # get a tuple containing the summary report fields to be displayed
             # given the detail level
             key_distance = [(k, detail - k) for k in self.SUMMARY_LEVELS.keys() if k <= detail]
+            # FIXME. 'ValueError: min() arg is an empty sequence' on following line unless --detail is specified
             key = min(key_distance, key=lambda x:(x[1]))[0]
             summary_fields_t = self.SUMMARY_LEVELS[key]
             # iterate over each summary report item
