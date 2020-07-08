@@ -236,18 +236,20 @@ def sealevel_pressure_US(sp_inHg, elev_foot, t_F):
     return slp_inHg
 
 
-def calculate_rain(newtotal, oldtotal):
-    """Calculate the rain differential given two cumulative measurements."""
+def calculate_delta(newtotal, oldtotal):
+    """Calculate the differential given two cumulative measurements."""
     if newtotal is not None and oldtotal is not None:
         if newtotal >= oldtotal:
             delta = newtotal - oldtotal
         else:
-            log.info("Rain counter reset detected: new=%s old=%s", newtotal, oldtotal)
+            log.info("Delta counter reset detected: new=%s old=%s", newtotal, oldtotal)
             delta = None
     else:
         delta = None
     return delta
 
+# for backwards compatibility
+calculate_rain = calculate_delta
 
 def solar_rad_Bras(lat, lon, altitude_m, ts=None, nfac=2):
     """Calculate maximum solar radiation using Bras method

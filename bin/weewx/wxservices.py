@@ -179,12 +179,12 @@ class WXCalculate(object):
             return getattr(self, instantiate_method)(section_config)
         return list()
 
-    def instantiate_delta(self, config_dict):
+    def instantiate_delta(self, delta_config):
         """Instantiate any Delta objects."""
 
         object_list = []
-        for delta_sect in config_dict:
-            object_list.append(Delta(delta_sect, **config_dict[delta_sect]))
+        for delta_sect in delta_config:
+            object_list.append(Delta(delta_sect, **delta_config[delta_sect]))
         return object_list
 
     def instantiate_cumulative(self, config_dict):
@@ -563,7 +563,7 @@ class WXXTypes(weewx.xtypes.XType):
 class PressureCooker(weewx.xtypes.XType):
     """Pressure related extensions to the WeeWX type system. """
 
-    def __init__(self, svc_dict, altitude_vt)
+    def __init__(self, svc_dict, altitude_vt):
         # def __init__(self, altitude_vt, max_ts_delta=1800, altimeter_algorithm='aaNOAA'):
         """Initialize the PressureCooker.
 
@@ -709,15 +709,15 @@ class PressureCooker(weewx.xtypes.XType):
 
 
 class Rater(weewx.xtypes.XType):
-    """"An extension to the WeeWX type system for calculating rainRate"""
+    """"An extension to the WeeWX type system for rate based fields."""
 
     def __init__(self, field, **rater_dict):
         """Initialize the Rater.
 
         Args:
-            rain_period: The length of the sliding window in seconds.
-            retain_period: How long to retain a rain event. Should be rain_period
-              plus archive_delay.
+            period: The length of the sliding window in seconds.
+            retain_period: How long to retain an event. Should be period plus
+              archive_delay.
         """
         self.field = field
         self.source_field = rater_dict.get('source_field')
@@ -727,21 +727,21 @@ class Rater(weewx.xtypes.XType):
         self.unit_system = None
 
     def add_loop_packet(self, record, db_manager):
-        # Was there any rain? If so, convert the rain to the unit system we are using,
-        # then intern it
-        if 'rain' in record and record['rain']:
+        # is there any source field data? If so, convert the source field data
+        # to the unit system we are using, then intern it
+        if self.source_field in record and record[self.source_field]:
             if self.unit_system is None:
                 # Adopt the unit system of the first record.
                 self.unit_system = record['usUnits']
             if self.events is None:
                 self._setup(record['dateTime'], db_manager)
-            # Get the unit system and group of the incoming rain. In theory, this should be
-            # the same as self.unit_system, but ...
+            # Get the unit system and group of the source field. In theory, this
+            # should be the same as self.unit_system, but ...
             u, g = weewx.units.getStandardUnitType(record['usUnits'], self.source_field)
             # Convert to the unit system that we are using
-            rain = weewx.units.convertStd((record[self.source_field], u, g), self.unit_system)[0]
+            value = weewx.units.convertStd((record[self.source_field], u, g), self.unit_system)[0]
             # Add it to the list of events
-            self.events.append((record['dateTime'], rain))
+            self.events.append((record['dateTime'], value))
 
         if self.events:
             # Trim any old packets:
@@ -756,14 +756,15 @@ class Rater(weewx.xtypes.XType):
         if self.events is None:
             self._setup(record['dateTime'], db_manager)
 
-        # Sum the rain events within the time window...
-        rainsum = sum(x[1] for x in self.events
+        # Sum the source field events within the time window...
+        source_sum = sum(x[1] for x in self.events
                       if x[0] > record['dateTime'] - self.period)
         # ...then divide by the period and scale to an hour
-        val = 3600 * rainsum / self.period
+        val = 3600 * source_sum / self.period
         # Get the unit and unit group for rainRate
         u, g = weewx.units.getStandardUnitType(self.unit_system, self.field)
-        # Form a ValueTuple, then convert it to the unit system of the incoming record
+        # Form a ValueTuple, then convert it to the unit system of the incoming
+        # record
         rr = weewx.units.convertStd(ValueTuple(val, u, g), record['usUnits'])
         return rr
 
@@ -773,65 +774,91 @@ class Rater(weewx.xtypes.XType):
             self.events = []
         start_ts = stop_ts - self.retain_period
         # Get all events since the window start from the database. Put it in
-        # a 'try' block because the database may not have a 'rain' field.
+        # a 'try' block because the database may not contain the source field.
         try:
             for row in db_manager.genSql("SELECT dateTime, usUnits, %s FROM %s "
                                          "WHERE dateTime>? AND dateTime<=?;"
                                          % self.source_field, db_manager.table_name,
                                          (start_ts, stop_ts)):
                 # Unpack the row:
-                time_ts, unit_system, rain = row
+                time_ts, unit_system, source = row
                 self.add_loop_packet(
-                    {'dateTime': time_ts, 'usUnits': unit_system, self.source_field: rain},
+                    {'dateTime': time_ts, 'usUnits': unit_system, self.source_field: source},
                     db_manager)
         except weedb.DatabaseError as e:
             log.debug("Database error while initializing %s: '%s'" % (self.field, e))
 
 
 class Delta(weewx.xtypes.XType):
-    """"An extension to the WeeWX type system for calculating rain"""
+    """An extension to the WeeWX type system for delta based fields."""
 
     def __init__(self, field, **delta_dict):
-        """Initialize the RainMaker.
+        """Initialize the Delta object.
 
         Args:
-            source_field: Source field from which rain is derived.
+            field: Name of the derived delta field
+            source_field: Source field from which the delta is derived.
         """
+
         self.field = field
         self.source_field = delta_dict.get('source_field')
         # Initialise the last source field value seen
         self.last_value = None
 
     def get_scalar(self, key, record, db_manager):
-        """Calculate rain"""
+        """Calculate the derived field"""
+
         if key != self.field:
             raise weewx.UnknownType(key)
 
         if self.source_field is not None and self.source_field in record:
-            # Calculate the rain value
-            _delta = weewx.wxformulas.calculate_rain(record[self.source_field],
-                                                     self.last_value)
+            # Calculate the delta value
+            _delta = weewx.wxformulas.calculate_delta(record[self.source_field],
+                                                      self.last_value)
             # Update the last source field value seen
             self.last_value = record[self.source_field]
-            unit, group = weewx.units.getStandardUnitType(record['usUnits'], self.field)
-            # Return the rain value as a ValueTuple
-            return ValueTuple(_delta, unit, group)
-        # If the source field is not available we cannot calculate rain so
-        # raise a CannotCalculate exception
+            # Get the unit and unit group
+            u, g = weewx.units.getStandardUnitType(record['usUnits'], self.field)
+            # Return the delta value as a ValueTuple
+            return ValueTuple(_delta, u, g)
+        # If the source field is not available we cannot calculate the delta
+        # field so raise a CannotCalculate exception
         raise weewx.CannotCalculate(self.field)
 
 
 class Cumulative(weewx.xtypes.XType):
-    """"An extension to the WeeWX type system for calculating rain"""
+    """An extension to the WeeWX type system for cumulative fields"""
 
     def __init__(self, field, **cumulative_dict):
-        """Initialize the RainMaker.
+        """Initialize the Cumulative object.
 
         Args:
-            source_field: Source field from which rain is derived.
+            field: Name of the derived cumulative field.
+            source_field: Source field from which the cumulative field is
+              derived.
         """
-        pass
+        self.field = field
+        self.source_field = cumulative_dict.get('source_field')
+        # Initialise the cumulative value
+        self.cumulative_value = None
 
     def get_scalar(self, key, record, db_manager):
-        """Calculate rain"""
+        """Calculate the cumulative field"""
+
+        if key != self.field:
+            raise weewx.UnknownType(key)
+
+        if self.source_field is not None and self.source_field in record and record[self.source_field] is not None:
+            # Calculate the cumulative value
+            if self.cumulative_value is not None:
+                self.cumulative_value += record[self.source_field]
+            else:
+                self.cumulative_value = record[self.source_field]
+            # Get the unit and unit group
+            u, g = weewx.units.getStandardUnitType(record['usUnits'], self.field)
+            # Return the cumulative value as a ValueTuple
+            return ValueTuple(self.cumulative_value, u, g)
+        # If the source field is not available or if the source field is None we
+        # cannot calculate the cumulative field so raise a CannotCalculate
+        # exception
         raise weewx.CannotCalculate(self.field)
