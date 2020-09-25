@@ -1116,7 +1116,12 @@ class ValueHelper(object):
         # Get the raw value tuple, then ask the formatter to look up an
         # appropriate ordinate:
         return self.formatter.to_ordinal_compass(self._raw_value_tuple)
-        
+
+    def json(self, format_string=None):
+        """Returns a formatted value suitable for JSON use."""
+        return self.toString(useThisFormat=format_string, None_string='null',
+                             addLabel=False, localize=False)
+
     @property
     def raw(self):
         """Returns the raw value without any formatting."""

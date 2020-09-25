@@ -364,7 +364,9 @@ class CheetahGenerator(weewx.reportengine.ReportGenerator):
         timespan_start_tt = time.localtime(timespan.start)
         searchList = [{'month_name' : time.strftime("%b", timespan_start_tt),
                        'year_name'  : timespan_start_tt[0],
-                       'encoding'   : encoding},
+                       'encoding'   : encoding,
+                       'json_array_element' : json_array_element,
+                       'json_array' : json_array},
                       self.outputted_dict]
 
         # Bind to the default_binding:
@@ -606,6 +608,22 @@ class Extras(SearchList):
         # dictionary, include it in the search list. Otherwise, just include
         # an empty dictionary.
         self.Extras = ExtraDict(generator.skin_dict['Extras'] if 'Extras' in generator.skin_dict else {})
+
+
+# =============================================================================
+# Functions used to implement the Search list
+# =============================================================================
+
+
+def json_array_element(elements_list):
+
+    e = ",".join(elements_list)
+    return ["".join(["[", e, "]"])]
+
+
+def json_array(vector_list):
+
+    return "[%s]" % ",".join(vector_list)
 
 
 # =============================================================================
