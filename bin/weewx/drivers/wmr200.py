@@ -860,7 +860,7 @@ def decode_uvi(pkt, pkt_data):
     try:
         record = {'uv': pkt_data[0 & 0x0f]}
         if DEBUG_PACKETS_UVI:
-            log.debug("  UV index:%s\n" % record['UV'])
+            log.debug("  UV index:%s\n" % record['uv'])
         return record
 
     except IndexError:
